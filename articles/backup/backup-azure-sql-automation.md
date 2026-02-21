@@ -558,6 +558,77 @@ Get-AzRecoveryServicesBackupWorkloadRecoveryConfig -PointInTime $PointInTime -It
 
 Once the relevant configuration is obtained for primary region restore or secondary region restore, the same restore command can be used to trigger restores and later tracked using the jobIDs.
 
+#### Cross subscription restores
+
+Azure Backup allows you to restore a SQL database to a target VM in a different subscription under the same tenant. By default, Cross Subscription Restore (CSR) is enabled on all Recovery Services vaults. To perform a cross subscription restore, first ensure that the target VM is [registered](#register-the-sql-vm) to the source vault. The following steps outline the end-to-end process:
+
+* Fetch the backup items from the source vault.
+* For such an item, fetch the recovery points (distinct and/or logs).
+* Choose a target server in the target subscription, ensure it's registered to the source vault, and then fetch the SQL instance.
+* Trigger the restore to that server.
+
+##### Fetch target server from target subscription
+
+Switch to the target subscription to fetch the container and SQL instance registered to the source vault.
+
+```powershell
+Select-AzSubscription -SubscriptionId "<target subscription ID>"
+$TargetContainer = Get-AzRecoveryServicesBackupContainer -ContainerType AzureVMAppContainer -Status Registered -VaultId $testVault.ID -FriendlyName "<target VM name>"
+$TargetSQLInstance = Get-AzRecoveryServicesBackupProtectableItem -WorkloadType MSSQL -ItemType SQLInstance -VaultId $testVault.ID -Container $TargetContainer
+```
+
+After fetching the target container and SQL instance, switch back to the source subscription.
+
+```powershell
+Select-AzSubscription -SubscriptionId "<source subscription ID>"
+```
+
+##### Prepare recovery configuration for cross subscription restore as Database
+
+As documented [above](#determine-recovery-configuration) for the normal SQL restore, the same command can be re-used to generate the relevant recovery configuration, with the cross subscription target SQL instance as `-TargetItem` and the cross subscription container as `-TargetContainer`.
+
+###### Cross subscription restore with distinct Recovery point
+
+```powershell
+$AnotherSubWithFullConfig = Get-AzRecoveryServicesBackupWorkloadRecoveryConfig -RecoveryPoint $FullRP -TargetItem $TargetSQLInstance -AlternateWorkloadRestore -VaultId $testVault.ID -TargetContainer $TargetContainer
+```
+
+###### Cross subscription restore with log point-in-time
+
+```powershell
+$AnotherSubWithLogConfig = Get-AzRecoveryServicesBackupWorkloadRecoveryConfig -PointInTime $PointInTime -Item $bkpItem -TargetItem $TargetSQLInstance -AlternateWorkloadRestore -VaultId $testVault.ID -TargetContainer $TargetContainer
+```
+
+##### Cross subscription restore as Files
+
+To restore the backup data as .bak files to a target VM in a different subscription, use the `-RestoreAsFiles` option with the target container from the target subscription.
+
+###### Cross subscription restore as files with distinct Recovery point
+
+```powershell
+$CrossSubFileRestoreWithFullConfig = Get-AzRecoveryServicesBackupWorkloadRecoveryConfig -RecoveryPoint $FullRP -TargetContainer $TargetContainer -RestoreAsFiles -FilePath "<target file path>" -VaultId $testVault.ID
+```
+
+###### Cross subscription restore as files with log point-in-time
+
+```powershell
+$CrossSubFileRestoreWithLogConfig = Get-AzRecoveryServicesBackupWorkloadRecoveryConfig -PointInTime $PointInTime -TargetContainer $TargetContainer -RestoreAsFiles -FilePath "<target file path>" -VaultId $testVault.ID
+```
+
+Once the relevant configuration is obtained for cross subscription restore, use the [Restore-AzRecoveryServicesBackupItem](/powershell/module/az.recoveryservices/restore-azrecoveryservicesbackupitem) PowerShell cmdlet to start the restore process. For cross subscription restore, don't use the `-RestoreToSecondaryRegion` parameter.
+
+```powershell
+Restore-AzRecoveryServicesBackupItem -WLRecoveryConfig $AnotherSubWithFullConfig -VaultId $testVault.ID
+```
+
+The restore operation returns a job to be tracked.
+
+```output
+WorkloadName     Operation            Status               StartTime                 EndTime                   JobID
+------------     ---------            ------               ---------                 -------                   -----
+MSSQLSERVER/m... Restore              InProgress           3/17/2019 10:02:45 AM                                3274xg2b-e4fg-5952-89b4-8cb566gc1748
+```
+
 ### Restore with relevant configuration
 
 Once the relevant recovery Config object is obtained and verified, use the [Restore-AzRecoveryServicesBackupItem](/powershell/module/az.recoveryservices/restore-azrecoveryservicesbackupitem) PowerShell cmdlet to start the restore process.
